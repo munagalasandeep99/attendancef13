@@ -11,7 +11,7 @@ const App = () => {
       {/* Tailwind CSS Script - Recommended to place in public/index.html <head> */}
       <script src="https://cdn.tailwindcss.com"></script>
       {/* Font Inter for consistent typography - Recommended to place in public/index.html <head> */}
-      <link href="https://fonts.googleapis.com/css2?family=Inter:wght400;500;600;700&display=swap" rel="stylesheet" />
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
       {/* The AWS SDK script should remain in your public/index.html to be globally available: */}
       {/* <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1158.0.min.js"></script> */}
       <style>
@@ -228,7 +228,7 @@ const EmployeeRegistration = () => {
             handleCanPlay();
         }
 
-      } catch (err) {
+      } catch (err) { // Corrected: changed 'Catch' to 'catch'
         console.error('Webcam Init Debug: Error accessing webcam in useEffect:', err);
         setWebcamError(`Error accessing webcam: ${err.name}. Please ensure camera is available and permissions are granted.`);
         setIsWebcamStreamReady(false);
@@ -657,7 +657,7 @@ const AttendanceCapture = () => {
             handleCanPlay();
         }
 
-      } catch (err) {
+      } catch (err) { // Corrected: changed 'Catch' to 'catch'
         console.error('Webcam Init Debug: Error accessing webcam in useEffect (Capture tab):', err);
         setWebcamError(`Error accessing webcam: ${err.name}. Please ensure camera is available and permissions are granted.`);
         setIsWebcamStreamReady(false);
@@ -803,7 +803,7 @@ const AttendanceCapture = () => {
         setFileName('No file chosen');
         setCapturedImage(null);
         setWebcamError(''); // Clear webcam errors
-        stopWebcam(); // Ensure webcam is stopped after upload
+        stopWebcam(); // Ensure webcam is stopped after
     } catch (err) {
         console.error('Error uploading photo for Attendance Capture:', err);
         setUploadError(`Failed to upload photo: ${err.message || 'An unknown error occurred.'}`);
@@ -922,63 +922,188 @@ const AttendanceCapture = () => {
 const AttendanceAnalytics = () => {
   // State for selected date, initialized to current date
   const [selectedDate, setSelectedDate] = useState(
-    new Date().toISOString().split('T')[0] // Formats date asYYYY-MM-DD for input type="date"
+    new Date().toISOString().split('T')[0] // Formats date as YYYY-MM-DD for input type="date"
   );
   const [errorMessage, setErrorMessage] = useState(''); // State for displaying API fetch errors
   const [analyticsData, setAnalyticsData] = useState(null); // State to store fetched analytics data
+  const [loading, setLoading] = useState(false); // State for loading indicator
 
-  // Function to fetch daily analytics
+  // Configure AWS SDK credentials for Lambda invocation
+  useEffect(() => {
+    if (typeof window.AWS === 'undefined') {
+        console.error("AWS SDK not loaded. Cannot invoke Lambda.");
+        setErrorMessage("AWS SDK not loaded. Cannot fetch analytics.");
+        return;
+    }
+
+    window.AWS.config.region = 'ap-south-1'; // Your AWS region
+    window.AWS.config.credentials = new window.AWS.CognitoIdentityCredentials({
+        IdentityPoolId: 'ap-south-1:fbe13061-500e-4f08-938d-176d6f6f2551', // Your Identity Pool ID
+    });
+
+    window.AWS.config.credentials.get(function(err){
+        if(err) {
+            console.error("Error retrieving AWS credentials for Analytics:", err);
+            setErrorMessage("Failed to get AWS credentials for analytics. Check Identity Pool configuration.");
+        } else {
+            console.log("AWS credentials successfully retrieved for Analytics.");
+            setErrorMessage(''); // Clear error if credentials are now ready
+        }
+    });
+  }, []); // Run once on component mount
+
+
+  // Function to fetch daily analytics by invoking a Lambda function
   const handleGetDailyAnalytics = async () => {
     setErrorMessage(''); // Clear previous errors
     setAnalyticsData(null); // Clear previous data
-    console.log(`Fetching daily analytics for: ${selectedDate}`);
+    setLoading(true); // Set loading true
+
     try {
-      // Placeholder for your actual API Gateway endpoint
-      const API_ENDPOINT = 'YOUR_API_GATEWAY_ENDPOINT';
-      // Provide a helpful message if the default placeholder is still in use
-      if (API_ENDPOINT === 'YOUR_API_GATEWAY_ENDPOINT') {
-          setErrorMessage("Error! Failed to fetch analytics: Please replace 'YOUR_API_GATEWAY_ENDPOINT' with your actual API.");
+      if (typeof window.AWS === 'undefined' || !window.AWS.config.credentials || !window.AWS.config.credentials.accessKeyId) {
+          setErrorMessage("AWS SDK credentials not configured. Cannot invoke Lambda.");
+          setLoading(false);
           return;
       }
-      // Example fetch call - this will require a live API endpoint to work
-      const response = await fetch(`${API_ENDPOINT}/daily?date=${selectedDate}`);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+
+      const lambda = new window.AWS.Lambda();
+      // IMPORTANT: Replace with your actual daily analytics Lambda ARN
+      const lambdaFunctionName = 'arn:aws:lambda:ap-south-1:116321083906:function:dailyAttendanceLambda'; // e.g., 'arn:aws:lambda:ap-south-1:123456789012:function:DailyAttendanceFunction'
+
+      // Provide a helpful message if the default placeholder is still in use
+      if (lambdaFunctionName === 'YOUR_LAMBDA_DAILY_ANALYTICS_ARN') {
+          setErrorMessage("Error! Failed to fetch analytics: Please replace 'YOUR_LAMBDA_DAILY_ANALYTICS_ARN' with your actual Lambda ARN.");
+          setLoading(false);
+          return;
       }
-      const data = await response.json();
-      setAnalyticsData(data); // Update state with fetched data
-      console.log('Daily Analytics Data:', data);
+
+      const params = {
+        FunctionName: lambdaFunctionName,
+        InvocationType: 'RequestResponse', // Synchronous invocation
+        Payload: JSON.stringify({ date: selectedDate }) // Pass the selected date as payload
+      };
+
+      console.log('Invoking daily analytics Lambda with payload:', params.Payload);
+      const result = await lambda.invoke(params).promise();
+      const payload = JSON.parse(result.Payload);
+
+      if (result.StatusCode === 200 && !payload.error) {
+        // Assuming Lambda returns a JSON string in payload.body
+        const parsedBody = JSON.parse(payload.body);
+        setAnalyticsData(parsedBody); // Update state with fetched data
+        console.log('Daily Analytics Data:', parsedBody);
+      } else {
+        const errorMsg = payload.error || (payload.errorMessage ? `Lambda Error: ${payload.errorMessage}` : 'Unknown error during Lambda invocation.');
+        throw new Error(`Lambda invocation failed: ${errorMsg}`);
+      }
     } catch (error) {
-      setErrorMessage(`Error! Failed to fetch analytics: ${error.message}`);
-      console.error('API Error:', error);
+      setErrorMessage(`Error fetching daily analytics: ${error.message}`);
+      console.error('Lambda Invocation Error:', error);
+    } finally {
+      setLoading(false); // Always set loading false
     }
   };
 
-  // Function to fetch weekly analytics
+  // Function to fetch weekly analytics by invoking a Lambda function
   const handleGetWeeklyAnalytics = async () => {
     setErrorMessage(''); // Clear previous errors
     setAnalyticsData(null); // Clear previous data
-    console.log(`Fetching weekly analytics for week of: ${selectedDate}`);
+    setLoading(true); // Set loading true
+
     try {
-      // Placeholder for your actual API Gateway endpoint
-      const API_ENDPOINT = 'YOUR_API_GATEWAY_ENDPOINT';
-       if (API_ENDPOINT === 'YOUR_API_GATEWAY_ENDPOINT') {
-          setErrorMessage("Error! Failed to fetch analytics: Please replace 'YOUR_API_GATEWAY_ENDPOINT' with your actual API.");
+      if (typeof window.AWS === 'undefined' || !window.AWS.config.credentials || !window.AWS.config.credentials.accessKeyId) {
+          setErrorMessage("AWS SDK credentials not configured. Cannot invoke Lambda.");
+          setLoading(false);
           return;
       }
-      // Example fetch call
-      const response = await fetch(`${API_ENDPOINT}/weekly?date=${selectedDate}`);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+
+      const lambda = new window.AWS.Lambda();
+      // IMPORTANT: Replace with your actual weekly analytics Lambda ARN
+      const lambdaFunctionName = 'arn:aws:lambda:ap-south-1:116321083906:function:weeklyAttendanceLambda'; // e.g., 'arn:aws:lambda:ap-south-1:123456789012:function:WeeklyAttendanceFunction'
+
+      // Provide a helpful message if the default placeholder is still in use
+      if (lambdaFunctionName === 'YOUR_LAMBDA_WEEKLY_ANALYTICS_ARN') {
+          setErrorMessage("Error! Failed to fetch analytics: Please replace 'YOUR_LAMBDA_WEEKLY_ANALYTICS_ARN' with your actual Lambda ARN.");
+          setLoading(false);
+          return;
       }
-      const data = await response.json();
-      setAnalyticsData(data); // Update state with fetched data
-      console.log('Weekly Analytics Data:', data);
+
+      const params = {
+        FunctionName: lambdaFunctionName,
+        InvocationType: 'RequestResponse', // Synchronous invocation
+        Payload: JSON.stringify({ date: selectedDate }) // Pass the selected date as payload
+      };
+
+      console.log('Invoking weekly analytics Lambda with payload:', params.Payload);
+      const result = await lambda.invoke(params).promise();
+      const payload = JSON.parse(result.Payload);
+
+      if (result.StatusCode === 200 && !payload.error) {
+        // Assuming Lambda returns a JSON string in payload.body
+        const parsedBody = JSON.parse(payload.body);
+        setAnalyticsData(parsedBody); // Update state with fetched data
+        console.log('Weekly Analytics Data:', parsedBody);
+      } else {
+        const errorMsg = payload.error || (payload.errorMessage ? `Lambda Error: ${payload.errorMessage}` : 'Unknown error during Lambda invocation.');
+        throw new Error(`Lambda invocation failed: ${errorMsg}`);
+      }
     } catch (error) {
-      setErrorMessage(`Error! Failed to fetch analytics: ${error.message}`);
-      console.error('API Error:', error);
+      setErrorMessage(`Error fetching weekly analytics: ${error.message}`);
+      console.error('Lambda Invocation Error:', error);
+    } finally {
+      setLoading(false); // Always set loading false
     }
   };
+
+  // Function to render daily analytics data
+  const renderDailyAnalytics = (data) => {
+    return (
+      <div className="mt-4 p-4 bg-white rounded-lg shadow-md">
+        <h3 className="text-xl font-bold mb-3 text-gray-800">Daily Attendance Report for {data.date}</h3>
+        <p className="text-lg mb-4">Total Present: <span className="font-semibold text-blue-700">{data.totalPresent}</span></p>
+        <h4 className="text-md font-semibold mb-2 text-gray-700">Present Employees:</h4>
+        {data.presentEmployees && data.presentEmployees.length > 0 ? (
+          <ul className="list-disc list-inside text-gray-600">
+            {data.presentEmployees.map((employee, index) => (
+              <li key={index} className="py-1">
+                <span className="font-medium">{employee.firstName} {employee.lastName}</span> at {employee.time}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-gray-500">No employees recorded as present on this date.</p>
+        )}
+      </div>
+    );
+  };
+
+  // Function to render weekly analytics data
+  const renderWeeklyAnalytics = (data) => {
+    return (
+      <div className="mt-4 p-4 bg-white rounded-lg shadow-md">
+        <h3 className="text-xl font-bold mb-3 text-gray-800">Weekly Attendance Report ({data.weekRange})</h3>
+        {data.weeklySummary && Object.keys(data.weeklySummary).length > 0 ? (
+          Object.keys(data.weeklySummary).map((employeeName, index) => (
+            <div key={index} className="mb-4 pb-2 border-b border-gray-200 last:border-b-0">
+              <h4 className="text-lg font-semibold text-blue-700 mb-2">{employeeName}</h4>
+              <p className="text-md mb-1">Total Days Present: <span className="font-medium">{data.weeklySummary[employeeName].totalDaysPresent}</span></p>
+              <h5 className="text-sm font-medium text-gray-600">Attendance Details:</h5>
+              <ul className="list-disc list-inside text-gray-500 text-sm ml-4">
+                {data.weeklySummary[employeeName].attendanceDetails.map((detail, detailIndex) => (
+                  <li key={detailIndex}>
+                    {detail.date} ({detail.dayOfWeek}) at {detail.time}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))
+        ) : (
+          <p className="text-gray-500">No attendance data for this week.</p>
+        )}
+      </div>
+    );
+  };
+
 
   return (
     <div className="flex flex-col items-center">
@@ -1004,16 +1129,29 @@ const AttendanceAnalytics = () => {
           <button
             onClick={handleGetDailyAnalytics}
             className="flex-1 px-8 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition-all duration-300 transform hover:scale-105"
+            disabled={loading} // Disable button while loading
           >
-            Get Daily Analytics
+            {loading ? 'Fetching Daily...' : 'Get Daily Analytics'}
           </button>
           <button
             onClick={handleGetWeeklyAnalytics}
             className="flex-1 px-8 py-3 bg-green-500 text-white font-semibold rounded-lg shadow-md hover:bg-green-600 transition-all duration-300 transform hover:scale-105"
+            disabled={loading} // Disable button while loading
           >
-            Get Weekly Analytics
+            {loading ? 'Fetching Weekly...' : 'Get Weekly Analytics'}
           </button>
         </div>
+
+        {/* Loading Indicator */}
+        {loading && (
+          <div className="flex items-center justify-center mt-4 text-blue-600">
+            <svg className="animate-spin h-5 w-5 mr-3 text-blue-600" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Processing request...
+          </div>
+        )}
 
         {/* Error Message Display */}
         {errorMessage && (
@@ -1023,12 +1161,18 @@ const AttendanceAnalytics = () => {
           </div>
         )}
 
-        {/* Placeholder for Analytics Data Display */}
+        {/* Analytics Data Display */}
         {analyticsData && (
           <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg relative mt-6">
             <strong className="font-bold">Analytics Data:</strong>
-            {/* Display fetched analytics data in a pre-formatted block */}
-            <pre className="mt-2 text-sm whitespace-pre-wrap">{JSON.stringify(analyticsData, null, 2)}</pre>
+            {/* Conditional rendering based on the structure of analyticsData to determine if it's daily or weekly */}
+            {analyticsData.presentEmployees ? (
+              renderDailyAnalytics(analyticsData)
+            ) : analyticsData.weeklySummary ? (
+              renderWeeklyAnalytics(analyticsData)
+            ) : (
+              <pre className="mt-2 text-sm whitespace-pre-wrap">{JSON.stringify(analyticsData, null, 2)}</pre>
+            )}
           </div>
         )}
       </div>
