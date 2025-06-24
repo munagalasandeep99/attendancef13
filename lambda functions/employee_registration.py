@@ -9,11 +9,10 @@ dynamodb = boto3.resource('dynamodb')
 
 # Constants
 DYNAMODB_TABLE_NAME = 'people'
-REKOGNITION_COLLECTION = 'people'  # changed from 'employees' to 'people'
+REKOGNITION_COLLECTION = 'people'
 
 # Get table reference
 employeeTable = dynamodb.Table(DYNAMODB_TABLE_NAME)
-
 
 def lambda_handler(event, context):
     print(event)
@@ -25,6 +24,23 @@ def lambda_handler(event, context):
     key = event['Records'][0]['s3']['object']['key']
 
     try:
+        # Search for existing face
+        search_response = rekognition.search_faces_by_image(
+            CollectionId=REKOGNITION_COLLECTION,
+            Image={'S3Object': {'Bucket': bucket, 'Name': key}},
+            MaxFaces=1,
+            FaceMatchThreshold=90  # Confidence threshold for matching
+        )
+        
+        if search_response['FaceMatches']:
+            faceId = search_response['FaceMatches'][0]['Face']['FaceId']
+            print(f"Face already exists with FaceId: {faceId}")
+            return {
+                'statusCode': 200,
+                'body': f"Face already registered with FaceId: {faceId}"
+            }
+        
+        # No match found, proceed with indexing
         response = index_employee_image(bucket, key)
         print(response)
         if response['ResponseMetadata']['HTTPStatusCode'] == 200 and response['FaceRecords']:
@@ -33,14 +49,23 @@ def lambda_handler(event, context):
             firstName = name[0]
             lastName = name[1] if len(name) > 1 else ''
             register_employee(faceId, firstName, lastName)
+            return {
+                'statusCode': 200,
+                'body': f"Face indexed and registered with FaceId: {faceId}"
+            }
         else:
             print(f"No face detected or error indexing image: {key}")
-        return response
+            return {
+                'statusCode': 400,
+                'body': f"No face detected in image: {key}"
+            }
     except Exception as e:
         print(e)
-        print(f"Error processing employee image {key} from bucket {bucket}.")
-        raise e
-
+        print(f"Error processing image {key} from bucket {bucket}.")
+        return {
+            'statusCode': 500,
+            'body': f"Error processing image: {str(e)}"
+        }
 
 def ensure_dynamodb_table():
     try:
@@ -64,7 +89,6 @@ def ensure_dynamodb_table():
         else:
             raise
 
-
 def ensure_rekognition_collection():
     collections = rekognition.list_collections()['CollectionIds']
     if REKOGNITION_COLLECTION not in collections:
@@ -74,10 +98,9 @@ def ensure_rekognition_collection():
     else:
         print(f"Rekognition collection '{REKOGNITION_COLLECTION}' already exists.")
 
-
 def index_employee_image(bucket, key):
     response = rekognition.index_faces(
-        CollectionId=REKOGNITION_COLLECTION,  # now 'people'
+        CollectionId=REKOGNITION_COLLECTION,
         Image={
             'S3Object': {
                 'Bucket': bucket,
@@ -86,7 +109,6 @@ def index_employee_image(bucket, key):
         }
     )
     return response
-
 
 def register_employee(faceId, firstName, lastName):
     employeeTable.put_item(
